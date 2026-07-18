@@ -6,6 +6,11 @@ import {
   initializeEmptyBuiltinStreams,
   type BuiltinStreams,
 } from './builtinAssetCatalog.ts';
+import builtinProjectUrl from './assets/projects/0422复活-戚测-01.json?url';
+import {
+  hydrateProjectData,
+  type SerializedProjectData,
+} from './projectData.ts';
 
 type Point = { x: number; y: number };
 
@@ -825,6 +830,7 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputBgRef = useRef<HTMLInputElement>(null);
   const projectImportStartedRef = useRef(false);
+  const manualProjectImportStartedRef = useRef(false);
   
   const [drawingMode, setDrawingMode] = useState<'path' | 'lasso' | 'invert' | 'grid' | 'inspect' | 'speed_select' | 'scissors' | 'edit' | 'bezier'>('path');
   const [selectionMode, setSelectionMode] = useState(false);
@@ -3041,116 +3047,70 @@ export default function App() {
     }
   };
 
+  const loadCustomImage = (
+    id: string,
+    src: string,
+  ): Promise<CustomImage> => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ id, img });
+    img.onerror = () => reject(new Error(`Failed to load project image: ${id}`));
+    img.src = src;
+  });
+
+  const applyProjectData = async (
+    data: SerializedProjectData,
+    successMessage: string,
+  ) => {
+    const backgroundSource = typeof data.bgImageSrc === 'string'
+      ? data.bgImageSrc
+      : null;
+    const [hydratedProject, hydratedBackground] = await Promise.all([
+      hydrateProjectData<CustomImage>(data, loadCustomImage),
+      backgroundSource
+        ? loadCustomImage('project-background', backgroundSource)
+        : Promise.resolve(null),
+    ]);
+
+    setBgImage(hydratedBackground?.img ?? null);
+    setBgScale(typeof data.bgScale === 'number' ? data.bgScale : 1);
+    setBgRotation(typeof data.bgRotation === 'number' ? data.bgRotation : 0);
+    setShowBgImage(typeof data.showBgImage === 'boolean' ? data.showBgImage : true);
+    setSnapStep(typeof data.snapStep === 'number' ? data.snapStep : 0.5);
+    setSpeedMultiplier(typeof data.speedMultiplier === 'number' ? data.speedMultiplier : 1);
+    setShimmerSpeed(typeof data.shimmerSpeed === 'number' ? data.shimmerSpeed : 5);
+    setDrawingMode('path');
+    setSelectionMode(false);
+    setGridPoints(Array.isArray(data.gridPoints) ? data.gridPoints : []);
+    setGridBoxes(Array.isArray(data.gridBoxes) ? data.gridBoxes : []);
+    setShimmerCells(new Set(Array.isArray(data.shimmerCells) ? data.shimmerCells : []));
+    setInvertCells(new Set(Array.isArray(data.invertCells) ? data.invertCells : []));
+    setInvertBrushSize(typeof data.invertBrushSize === 'number' ? data.invertBrushSize : 1);
+    setSpeedSelectionAreas(
+      Array.isArray(data.speedSelectionAreas) ? data.speedSelectionAreas : [],
+    );
+    setPresets(hydratedProject.presets as PresetConfig[]);
+    setPaths(hydratedProject.paths as PathConfig[]);
+    setActivePresetId(
+      typeof data.activePresetId === 'string'
+        ? data.activePresetId
+        : 'default-preset',
+    );
+    showNotification(successMessage);
+  };
+
   const importProject = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     projectImportStartedRef.current = true;
+    manualProjectImportStartedRef.current = true;
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        const data = JSON.parse(event.target?.result as string);
-        const imageRegistry: Record<string, CustomImage> = {};
-
-        const deserializeImage = (id: string, src: string): Promise<CustomImage> => {
-          return new Promise((resolve) => {
-            const img = new Image();
-            img.onload = () => resolve({ id, img });
-            img.src = src;
-          });
-        };
-
-        // 1. Hydrate image registry
-        if (data.imageRegistry) {
-          const imageEntries = Object.entries(data.imageRegistry as Record<string, string>);
-          for (const [id, src] of imageEntries) {
-            imageRegistry[id] = await deserializeImage(id, src);
-          }
-        }
-
-        const hydrateStream = (stream: any) => ({
-          ...stream,
-          images: stream.images.map((id: string) => imageRegistry[id]).filter(Boolean)
-        });
-
-        const hydratePath = (path: any) => ({
-          ...path,
-          hidden: path.hidden ?? false,
-          stream1: hydrateStream(path.stream1),
-          stream2: hydrateStream(path.stream2),
-          s1Textures: [],
-          s2Textures: []
-        });
-
-        const hydratePreset = (preset: any) => ({
-          ...preset,
-          stream1: hydrateStream(preset.stream1),
-          stream2: hydrateStream(preset.stream2)
-        });
-
-        // Compatibility fallback for old version exports that stored full CustomImage objects
-        const deserializeLegacyStream = async (stream: any) => ({
-          ...stream,
-          images: await Promise.all(stream.images.map((imgData: any) => {
-            if (typeof imgData === 'string') return imageRegistry[imgData]; // New version
-            const img = new Image();
-            img.src = imgData.src;
-            return new Promise(resolve => {
-              img.onload = () => resolve({ id: imgData.id, img });
-            });
-          }))
-        });
-
-        // Restore background
-        if (data.bgImageSrc) {
-          const img = new Image();
-          img.onload = () => setBgImage(img);
-          img.src = data.bgImageSrc;
-        } else {
-          setBgImage(null);
-        }
-
-        // Restore basics
-        setBgScale(data.bgScale ?? 1);
-        setBgRotation(data.bgRotation ?? 0);
-        setShowBgImage(data.showBgImage ?? true);
-        setSnapStep(data.snapStep ?? 0.5);
-        setSpeedMultiplier(data.speedMultiplier ?? 1);
-        setShimmerSpeed(data.shimmerSpeed ?? 5);
-        setDrawingMode('path');
-        setSelectionMode(false);
-        setGridPoints(data.gridPoints ?? []);
-        setGridBoxes(data.gridBoxes ?? []);
-        setShimmerCells(new Set(data.shimmerCells ?? []));
-        setInvertCells(new Set(data.invertCells ?? []));
-        setInvertBrushSize(data.invertBrushSize ?? 1);
-        setSpeedSelectionAreas(data.speedSelectionAreas ?? []);
-        
-        // Final hydration
-        if (data.version === '1.1') {
-          setPresets((data.presets || []).map(hydratePreset));
-          setPaths((data.paths || []).map(hydratePath));
-        } else {
-          // Legacy support for version 1.0
-          const legacyPresets = await Promise.all((data.presets || []).map(async (p: any) => ({
-            ...p,
-            stream1: await deserializeLegacyStream(p.stream1),
-            stream2: await deserializeLegacyStream(p.stream2)
-          })));
-          setPresets(legacyPresets);
-
-          const legacyPaths = await Promise.all((data.paths || []).map(async (p: any) => ({
-            ...p,
-            stream1: await deserializeLegacyStream(p.stream1),
-            stream2: await deserializeLegacyStream(p.stream2),
-            s1Textures: [],
-            s2Textures: []
-          })));
-          setPaths(legacyPaths);
-        }
-
-        setActivePresetId(data.activePresetId || 'default-preset');
-        showNotification('项目导入成功！');
+        const data = JSON.parse(
+          event.target?.result as string,
+        ) as SerializedProjectData;
+        await applyProjectData(data, '项目导入成功！');
       } catch (err) {
         console.error('Import error:', err);
         showNotification('导入失败，请检查文件格式。');
@@ -3159,6 +3119,32 @@ export default function App() {
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(builtinProjectUrl)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Failed to fetch builtin project: ${response.status}`);
+        }
+        return response.json() as Promise<SerializedProjectData>;
+      })
+      .then(data => {
+        if (cancelled || manualProjectImportStartedRef.current) return;
+        projectImportStartedRef.current = true;
+        return applyProjectData(data, '内置项目已载入');
+      })
+      .catch(error => {
+        if (cancelled) return;
+        console.error('Builtin project import error:', error);
+        showNotification('内置项目加载失败，请刷新页面重试');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const clearShimmer = () => {
     saveStateToUndo();
