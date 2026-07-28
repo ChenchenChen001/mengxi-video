@@ -28,6 +28,7 @@ test('fades a released guide line from full opacity to zero over two seconds', (
   assert.equal(getGuideOpacity(5000, 6000), 0.5);
   assert.equal(getGuideOpacity(5000, 7000), 0);
   assert.equal(getGuideOpacity(5000, 9000), 0);
+  assert.equal(getGuideOpacity(5000, 4000), 1);
 });
 
 test('measures distance to a degenerate line segment as a point', () => {
@@ -37,13 +38,13 @@ test('measures distance to a degenerate line segment as a point', () => {
   );
 });
 
-test('hits a path through adjacent segments without returning its id twice', () => {
+test('hits a path through a non-first segment without returning its id twice', () => {
   const paths = [{
     id: 'zigzag',
     points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 10 }],
   }];
 
-  assert.deepEqual(findHitPathIds(paths, { x: 10, y: 1 }, 2), ['zigzag']);
+  assert.deepEqual(findHitPathIds(paths, { x: 15, y: 5 }, 1), ['zigzag']);
 });
 
 test('returns each hit path once and excludes paths already erased in a drag', () => {
@@ -58,4 +59,26 @@ test('returns each hit path once and excludes paths already erased in a drag', (
     findHitPathIds(paths, { x: 10, y: 5 }, 6, new Set(['first'])),
     ['second'],
   );
+});
+
+test('supports numeric path ids and excludes numeric ids already erased', () => {
+  const paths = [
+    { id: 7, points: [{ x: 0, y: 0 }, { x: 20, y: 0 }] },
+    { id: 8, points: [{ x: 0, y: 10 }, { x: 20, y: 10 }] },
+  ];
+
+  assert.deepEqual(findHitPathIds(paths, { x: 10, y: 5 }, 6), [7, 8]);
+  assert.deepEqual(
+    findHitPathIds(paths, { x: 10, y: 5 }, 6, new Set([7])),
+    [8],
+  );
+});
+
+test('returns a duplicate path id only once across separate path objects', () => {
+  const paths = [
+    { id: 'duplicate', points: [{ x: 0, y: 0 }, { x: 20, y: 0 }] },
+    { id: 'duplicate', points: [{ x: 0, y: 10 }, { x: 20, y: 10 }] },
+  ];
+
+  assert.deepEqual(findHitPathIds(paths, { x: 10, y: 5 }, 6), ['duplicate']);
 });

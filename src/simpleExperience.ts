@@ -5,8 +5,10 @@ export type PointLike = {
   y: number;
 };
 
+export type PathId = string | number;
+
 export type PathLike = {
-  id: string;
+  id: PathId;
   points: PointLike[];
 };
 
@@ -57,16 +59,18 @@ export function findHitPathIds(
   paths: PathLike[],
   point: PointLike,
   radius: number,
-  excludedIds: ReadonlySet<string> = new Set(),
-): string[] {
-  const hitIds: string[] = [];
+  excludedIds: ReadonlySet<PathId> = new Set(),
+): PathId[] {
+  const hitIds: PathId[] = [];
+  const seenIds = new Set<PathId>(excludedIds);
 
   for (const path of paths) {
-    if (excludedIds.has(path.id)) continue;
+    if (seenIds.has(path.id)) continue;
 
     for (let index = 1; index < path.points.length; index += 1) {
       if (distancePointToSegment(point, path.points[index - 1], path.points[index]) <= radius) {
         hitIds.push(path.id);
+        seenIds.add(path.id);
         break;
       }
     }
