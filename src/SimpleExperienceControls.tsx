@@ -1,4 +1,4 @@
-import { Eraser, Palette, Trash2, Undo2 } from 'lucide-react';
+import { Eraser, Palette, Settings2, Trash2, Undo2 } from 'lucide-react';
 
 import type { ExperienceTool } from './simpleExperience.ts';
 
@@ -88,6 +88,15 @@ export function SimpleExperienceControls({
           <Trash2 aria-hidden="true" size={18} strokeWidth={1.6} />
           <span>重置</span>
         </button>
+        <span aria-hidden="true" className="h-6 w-px bg-stone-300/80" />
+        <a
+          aria-label="完整编辑器"
+          className={`${baseButtonClassName} text-stone-600 hover:bg-stone-200/70 hover:text-stone-900`}
+          href="?editor=1"
+        >
+          <Settings2 aria-hidden="true" size={18} strokeWidth={1.6} />
+          <span>完整编辑器</span>
+        </a>
       </div>
     </div>
   );

@@ -27,6 +27,14 @@ test('renders the four simple-experience controls and draw guidance', () => {
   assert.match(markup, /按住鼠标左键绘制路径，文字将沿路径流动/);
 });
 
+test('renders an internal link to the full editor', () => {
+  const markup = renderControls();
+
+  assert.match(markup, /aria-label="完整编辑器"/);
+  assert.match(markup, /href="\?editor=1"/);
+  assert.match(markup, />完整编辑器</);
+});
+
 test('renders erase guidance and exposes the active tool with aria-pressed', () => {
   const markup = renderControls({ tool: 'erase' });
 
