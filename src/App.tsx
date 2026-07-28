@@ -11,6 +11,14 @@ import {
   hydrateProjectData,
   type SerializedProjectData,
 } from './projectData.ts';
+import { SimpleExperienceControls } from './SimpleExperienceControls.tsx';
+import {
+  findHitPathIds,
+  getGuideOpacity,
+  isEditorMode,
+  screenPixelsToLogical,
+  type ExperienceTool,
+} from './simpleExperience.ts';
 
 type Point = { x: number; y: number };
 
@@ -827,6 +835,7 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
 };
 
 export default function App() {
+  const editorMode = isEditorMode(window.location.search);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputBgRef = useRef<HTMLInputElement>(null);
   const projectImportStartedRef = useRef(false);
@@ -853,8 +862,9 @@ export default function App() {
   const logicalWidthRef = useRef(DEFAULT_LOGICAL_WIDTH);
   const logicalHeightRef = useRef(DEFAULT_LOGICAL_HEIGHT);
   const [colorIndex, setColorIndex] = useState(0);
-  const [showPaths, setShowPaths] = useState(true);
-  const [showGrid, setShowGrid] = useState(true);
+  const [showPaths, setShowPaths] = useState(editorMode);
+  const [showGrid, setShowGrid] = useState(editorMode);
+  const [simpleTool, setSimpleTool] = useState<ExperienceTool>('draw');
   const [shimmerBrushSize, setShimmerBrushSize] = useState(1);
   const [invertBrushSize, setInvertBrushSize] = useState(1);
   const [snapStep, setSnapStep] = useState(0.5);
@@ -1104,8 +1114,13 @@ export default function App() {
 
   const viewScaleRef = useRef(1);
   const viewOffsetRef = useRef({ x: 0, y: 0 });
-  const showPathsRef = useRef(true);
-  const showGridRef = useRef(true);
+  const showPathsRef = useRef(editorMode);
+  const showGridRef = useRef(editorMode);
+  const simpleToolRef = useRef<ExperienceTool>('draw');
+  const simpleReleasedAtRef = useRef<Map<number, number>>(new Map());
+  const simpleErasePointerActiveRef = useRef(false);
+  const simpleEraseUndoSavedRef = useRef(false);
+  const simpleErasedPathIdsRef = useRef<Set<string | number>>(new Set());
   const drawingModeRef = useRef<'path' | 'lasso' | 'invert' | 'grid' | 'inspect' | 'speed_select' | 'scissors' | 'edit' | 'bezier'>('path');
   const selectedParticleIdRef = useRef<number | null>(null);
   const expandedPathIdRef = useRef<number | null>(null);
@@ -1138,6 +1153,7 @@ export default function App() {
   useEffect(() => { drawingModeRef.current = drawingMode; }, [drawingMode]);
   useEffect(() => { showPathsRef.current = showPaths; }, [showPaths]);
   useEffect(() => { showGridRef.current = showGrid; }, [showGrid]);
+  useEffect(() => { simpleToolRef.current = simpleTool; }, [simpleTool]);
   useEffect(() => { logicalWidthRef.current = logicalWidth; }, [logicalWidth]);
   useEffect(() => { logicalHeightRef.current = logicalHeight; }, [logicalHeight]);
   useEffect(() => { selectedParticleIdRef.current = selectedParticleId; }, [selectedParticleId]);
@@ -1227,7 +1243,7 @@ export default function App() {
       let safeOffsetX = 0;
       let safeOffsetY = 0;
 
-      if (uiVisible) {
+      if (editorMode && uiVisible) {
         const sideWidth = 340; // 320px panel + 20px gap
         const topHeight = 100; // Toolbar height
         
@@ -1248,7 +1264,9 @@ export default function App() {
       const scale = Math.min(scaleX, scaleY) * 0.98; 
       setViewScale(scale);
       
-      const offsetX = GRID_UNIT;
+      const offsetX = editorMode
+        ? GRID_UNIT
+        : (safeW - logicalWidthRef.current * scale) / 2;
       const offsetY = safeOffsetY + (safeH - logicalHeightRef.current * scale) / 2;
       setViewOffset({ x: offsetX, y: offsetY });
 
@@ -1366,6 +1384,39 @@ export default function App() {
         };
         drawCurrent(ctx, viewScaleRef.current);
         if (rCtx) drawCurrent(rCtx, 1);
+      }
+
+      if (!editorMode) {
+        const drawSimpleGuides = (c: CanvasRenderingContext2D, s: number) => {
+          pathsRef.current.forEach(path => {
+            if (path.hidden || path.points.length < 2) return;
+
+            const opacity = simpleToolRef.current === 'erase'
+              ? 1
+              : getGuideOpacity(
+                  simpleReleasedAtRef.current.get(path.id),
+                  Date.now(),
+                );
+            if (opacity <= 0) return;
+
+            c.save();
+            c.beginPath();
+            c.moveTo(path.points[0].x, path.points[0].y);
+            for (let i = 1; i < path.points.length; i++) {
+              c.lineTo(path.points[i].x, path.points[i].y);
+            }
+            c.lineCap = 'round';
+            c.lineJoin = 'round';
+            c.strokeStyle = simpleToolRef.current === 'erase'
+              ? 'rgba(159, 74, 60, 0.42)'
+              : 'rgba(75, 64, 52, 0.32)';
+            c.globalAlpha = opacity;
+            c.lineWidth = (simpleToolRef.current === 'erase' ? 3 : 2) / s;
+            c.stroke();
+            c.restore();
+          });
+        };
+        drawSimpleGuides(ctx, viewScaleRef.current);
       }
 
       // Draw saved paths
@@ -2228,8 +2279,55 @@ export default function App() {
     };
   }, [drawingMode, uiVisible, logicalWidth, logicalHeight]);
 
+  const eraseSimplePathsAtPoint = (point: Point) => {
+    const hitIds = findHitPathIds(
+      pathsRef.current,
+      point,
+      screenPixelsToLogical(24, viewScaleRef.current),
+      simpleErasedPathIdsRef.current,
+    );
+    if (hitIds.length === 0) return;
+
+    if (!simpleEraseUndoSavedRef.current) {
+      saveStateToUndo();
+      simpleEraseUndoSavedRef.current = true;
+    }
+
+    hitIds.forEach(id => simpleErasedPathIdsRef.current.add(id));
+    const erasedIds = new Set(hitIds);
+    setPaths(previousPaths => (
+      previousPaths.filter(path => !erasedIds.has(path.id))
+    ));
+    particlesRef.current = particlesRef.current.filter(
+      particle => !erasedIds.has(particle.pathId),
+    );
+  };
+
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
+
+    if (!editorMode) {
+      if (e.button !== 0) return;
+
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const rect = e.currentTarget.getBoundingClientRect();
+      const logicalPoint = {
+        x: (e.clientX - rect.left - viewOffset.x) / viewScale,
+        y: (e.clientY - rect.top - viewOffset.y) / viewScale,
+      };
+
+      if (simpleToolRef.current === 'erase') {
+        simpleErasePointerActiveRef.current = true;
+        simpleEraseUndoSavedRef.current = false;
+        simpleErasedPathIdsRef.current = new Set();
+        eraseSimplePathsAtPoint(logicalPoint);
+        return;
+      }
+
+      setIsDrawing(true);
+      currentPathRef.current = [logicalPoint];
+      return;
+    }
 
     if (e.button === 1) {
       setIsPanning(true);
@@ -2539,6 +2637,13 @@ export default function App() {
     const logicalY = (screenY - viewOffset.y) / viewScale;
     mousePosRef.current = { x: logicalX, y: logicalY };
 
+    if (!editorMode && simpleToolRef.current === 'erase') {
+      if (simpleErasePointerActiveRef.current) {
+        eraseSimplePathsAtPoint({ x: logicalX, y: logicalY });
+      }
+      return;
+    }
+
     if (activeBezierPoint && isDrawing) {
       const { pathId, index } = activeBezierPoint;
       setPaths(prev => prev.map(p => {
@@ -2702,6 +2807,28 @@ export default function App() {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!editorMode && e.type === 'pointercancel') {
+      simpleErasePointerActiveRef.current = false;
+      simpleEraseUndoSavedRef.current = false;
+      simpleErasedPathIdsRef.current = new Set();
+      setIsDrawing(false);
+      currentPathRef.current = [];
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
+
+    if (!editorMode && simpleToolRef.current === 'erase') {
+      simpleErasePointerActiveRef.current = false;
+      simpleEraseUndoSavedRef.current = false;
+      simpleErasedPathIdsRef.current = new Set();
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
+
     const dist = Math.hypot(e.clientX - pointerDownPosRef.current.x, e.clientY - pointerDownPosRef.current.y);
     const isClick = dist < 5;
 
@@ -2883,9 +3010,12 @@ export default function App() {
         s2Textures: []
       };
 
+      if (!editorMode) {
+        simpleReleasedAtRef.current.set(newPath.id, Date.now());
+      }
       setPaths(prev => [...prev, newPath]);
-      setExpandedPathId(newPath.id);
-      setSelectedPathId(newPath.id);
+      setExpandedPathId(editorMode ? newPath.id : null);
+      setSelectedPathId(editorMode ? newPath.id : null);
       saveStateToUndo();
     }
     currentPathRef.current = [];
@@ -3059,13 +3189,17 @@ export default function App() {
 
   const applyProjectData = async (
     data: SerializedProjectData,
-    successMessage: string,
+    successMessage?: string,
+    simpleExperience = false,
   ) => {
     const backgroundSource = typeof data.bgImageSrc === 'string'
       ? data.bgImageSrc
       : null;
+    const hydrationData = simpleExperience
+      ? { ...data, paths: [] }
+      : data;
     const [hydratedProject, hydratedBackground] = await Promise.all([
-      hydrateProjectData<CustomImage>(data, loadCustomImage),
+      hydrateProjectData<CustomImage>(hydrationData, loadCustomImage),
       backgroundSource
         ? loadCustomImage('project-background', backgroundSource)
         : Promise.resolve(null),
@@ -3076,26 +3210,62 @@ export default function App() {
     setBgRotation(typeof data.bgRotation === 'number' ? data.bgRotation : 0);
     setShowBgImage(typeof data.showBgImage === 'boolean' ? data.showBgImage : true);
     setSnapStep(typeof data.snapStep === 'number' ? data.snapStep : 0.5);
-    setSpeedMultiplier(typeof data.speedMultiplier === 'number' ? data.speedMultiplier : 1);
+    setSpeedMultiplier(
+      simpleExperience
+        ? 0.4
+        : (typeof data.speedMultiplier === 'number' ? data.speedMultiplier : 1),
+    );
     setShimmerSpeed(typeof data.shimmerSpeed === 'number' ? data.shimmerSpeed : 5);
     setDrawingMode('path');
     setSelectionMode(false);
-    setGridPoints(Array.isArray(data.gridPoints) ? data.gridPoints : []);
-    setGridBoxes(Array.isArray(data.gridBoxes) ? data.gridBoxes : []);
-    setShimmerCells(new Set(Array.isArray(data.shimmerCells) ? data.shimmerCells : []));
-    setInvertCells(new Set(Array.isArray(data.invertCells) ? data.invertCells : []));
+    const nextGridPoints = simpleExperience
+      ? []
+      : (Array.isArray(data.gridPoints) ? data.gridPoints : []);
+    const nextGridBoxes = simpleExperience
+      ? []
+      : (Array.isArray(data.gridBoxes) ? data.gridBoxes : []);
+    const nextShimmerCells = new Set<string>(
+      simpleExperience || !Array.isArray(data.shimmerCells)
+        ? []
+        : data.shimmerCells,
+    );
+    const nextInvertCells = new Set<string>(
+      simpleExperience || !Array.isArray(data.invertCells)
+        ? []
+        : data.invertCells,
+    );
+    setGridPoints(nextGridPoints);
+    setGridBoxes(nextGridBoxes);
+    gridPointsRef.current = nextGridPoints;
+    gridBoxesRef.current = nextGridBoxes;
+    setGridSelectionStart(null);
+    setShimmerCells(nextShimmerCells);
+    shimmerCellsRef.current = nextShimmerCells;
+    setInvertCells(nextInvertCells);
+    invertCellsRef.current = nextInvertCells;
     setInvertBrushSize(typeof data.invertBrushSize === 'number' ? data.invertBrushSize : 1);
     setSpeedSelectionAreas(
-      Array.isArray(data.speedSelectionAreas) ? data.speedSelectionAreas : [],
+      simpleExperience || !Array.isArray(data.speedSelectionAreas)
+        ? []
+        : data.speedSelectionAreas,
     );
     setPresets(hydratedProject.presets as PresetConfig[]);
-    setPaths(hydratedProject.paths as PathConfig[]);
+    setPaths(simpleExperience ? [] : hydratedProject.paths as PathConfig[]);
     setActivePresetId(
       typeof data.activePresetId === 'string'
         ? data.activePresetId
         : 'default-preset',
     );
-    showNotification(successMessage);
+    if (simpleExperience) {
+      setCurrentSpeedSelectionCells(new Set());
+      particlesRef.current = [];
+      setSelectedPathId(null);
+      setExpandedPathId(null);
+      setShowGrid(false);
+      setShowPaths(false);
+      simpleReleasedAtRef.current.clear();
+    }
+    if (successMessage) showNotification(successMessage);
   };
 
   const importProject = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3133,7 +3303,11 @@ export default function App() {
       .then(data => {
         if (cancelled || manualProjectImportStartedRef.current) return;
         projectImportStartedRef.current = true;
-        return applyProjectData(data, '内置项目已载入');
+        return applyProjectData(
+          data,
+          editorMode ? '内置项目已载入' : undefined,
+          !editorMode,
+        );
       })
       .catch(error => {
         if (cancelled) return;
@@ -3582,7 +3756,12 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         undoRef.current();
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+        return;
+      }
+
+      if (!editorMode) return;
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
         e.preventDefault();
         redoRef.current();
       } else if (e.key === 'h' || e.key === 'H') {
@@ -3814,6 +3993,28 @@ export default function App() {
     }));
   };
 
+  const handleSimpleToolChange = (tool: ExperienceTool) => {
+    simpleToolRef.current = tool;
+    setSimpleTool(tool);
+    simpleErasePointerActiveRef.current = false;
+    simpleEraseUndoSavedRef.current = false;
+    simpleErasedPathIdsRef.current = new Set();
+    currentPathRef.current = [];
+    setIsDrawing(false);
+  };
+
+  const resetSimpleExperience = () => {
+    if (paths.length === 0) return;
+
+    saveStateToUndo();
+    setPaths([]);
+    particlesRef.current = [];
+    currentPathRef.current = [];
+    setIsDrawing(false);
+    setSelectedPathId(null);
+    setExpandedPathId(null);
+  };
+
   // --- Reusable Parameter Editor UI ---
   // ParameterEditor is now a separate component to comply with Rules of Hooks
 
@@ -3833,14 +4034,17 @@ export default function App() {
         ref={canvasRef}
         tabIndex={0}
         className={`absolute inset-0 w-full h-full outline-none ${
-          isPanning ? 'cursor-grabbing' :
-          isDraggingPath ? 'cursor-move' :
-          liquifyMode ? 'cursor-none' : 
-          drawingMode === 'scissors' ? 'cursor-crosshair' :
-          selectionMode ? 'cursor-pointer' : 
-          drawingMode === 'lasso' ? 'cursor-cell' : 
-          'cursor-crosshair'
+          !editorMode
+            ? (simpleTool === 'erase' ? 'cursor-red' : 'cursor-crosshair')
+            : isPanning ? 'cursor-grabbing'
+            : isDraggingPath ? 'cursor-move'
+            : liquifyMode ? 'cursor-none'
+            : drawingMode === 'scissors' ? 'cursor-crosshair'
+            : selectionMode ? 'cursor-pointer'
+            : drawingMode === 'lasso' ? 'cursor-cell'
+            : 'cursor-crosshair'
         }`}
+        onContextMenu={editorMode ? undefined : event => event.preventDefault()}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -3854,6 +4058,8 @@ export default function App() {
         </div>
       )}
 
+      {editorMode && (
+        <>
       {/* Liquify Top Bar */}
       {liquifyMode && (
         <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 bg-white/90 backdrop-blur-md p-3 rounded-2xl border border-blue-200 shadow-lg animate-in slide-in-from-top-4">
@@ -5287,6 +5493,19 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+        </>
+      )}
+
+      {!editorMode && (
+        <SimpleExperienceControls
+          tool={simpleTool}
+          canUndo={undoStack.length > 0}
+          hasPaths={paths.length > 0}
+          onToolChange={handleSimpleToolChange}
+          onUndo={undo}
+          onReset={resetSimpleExperience}
+        />
       )}
     </div>
   );
