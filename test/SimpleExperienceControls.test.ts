@@ -1,21 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ComponentProps } from 'react';
+import { createElement, type ComponentProps } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { SimpleExperienceControls } from '../src/SimpleExperienceControls.tsx';
 
 const renderControls = (overrides: Partial<ComponentProps<typeof SimpleExperienceControls>> = {}) =>
   renderToStaticMarkup(
-    <SimpleExperienceControls
-      tool="draw"
-      canUndo={false}
-      hasPaths={false}
-      onToolChange={() => undefined}
-      onUndo={() => undefined}
-      onReset={() => undefined}
-      {...overrides}
-    />,
+    createElement(SimpleExperienceControls, {
+      tool: 'draw',
+      canUndo: false,
+      hasPaths: false,
+      onToolChange: () => undefined,
+      onUndo: () => undefined,
+      onReset: () => undefined,
+      ...overrides,
+    }),
   );
 
 test('renders the four simple-experience controls and draw guidance', () => {
