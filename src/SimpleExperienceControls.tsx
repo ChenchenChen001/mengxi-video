@@ -6,6 +6,7 @@ export type SimpleExperienceControlsProps = {
   tool: ExperienceTool;
   canUndo: boolean;
   hasPaths: boolean;
+  isReady?: boolean;
   onToolChange: (tool: ExperienceTool) => void;
   onUndo: () => void;
   onReset: () => void;
@@ -21,12 +22,15 @@ export function SimpleExperienceControls({
   tool,
   canUndo,
   hasPaths,
+  isReady = true,
   onToolChange,
   onUndo,
   onReset,
 }: SimpleExperienceControlsProps) {
   const isDrawing = tool === 'draw';
-  const prompt = isDrawing
+  const prompt = !isReady
+    ? '正在载入素材，请稍候'
+    : isDrawing
     ? '按住鼠标左键绘制路径，文字将沿路径流动'
     : '按住鼠标左键划过路径即可擦除';
 
@@ -36,6 +40,7 @@ export function SimpleExperienceControls({
         {prompt}
       </p>
       <div
+        aria-busy={!isReady}
         aria-label="绘制工具"
         className="pointer-events-auto flex items-center gap-1 rounded-2xl border border-stone-400/35 bg-white/80 p-1.5 shadow-[0_8px_24px_rgba(61,49,36,0.14)] backdrop-blur-sm"
         role="toolbar"
@@ -44,6 +49,7 @@ export function SimpleExperienceControls({
           aria-label="画线"
           aria-pressed={isDrawing}
           className={`${baseButtonClassName} ${isDrawing ? 'bg-stone-800 text-stone-50 shadow-sm' : 'hover:bg-stone-200/70'}`}
+          disabled={!isReady}
           onClick={() => onToolChange('draw')}
           type="button"
         >
@@ -54,6 +60,7 @@ export function SimpleExperienceControls({
           aria-label="橡皮"
           aria-pressed={!isDrawing}
           className={`${baseButtonClassName} ${!isDrawing ? 'bg-[#9f4a3c] text-stone-50 shadow-sm' : 'hover:bg-stone-200/70'}`}
+          disabled={!isReady}
           onClick={() => onToolChange('erase')}
           type="button"
         >
@@ -64,7 +71,7 @@ export function SimpleExperienceControls({
         <button
           aria-label="撤销"
           className={`${baseButtonClassName} hover:bg-stone-200/70`}
-          disabled={!canUndo}
+          disabled={!isReady || !canUndo}
           onClick={onUndo}
           type="button"
         >
@@ -74,7 +81,7 @@ export function SimpleExperienceControls({
         <button
           aria-label="重置"
           className={`${baseButtonClassName} hover:bg-stone-200/70`}
-          disabled={!hasPaths}
+          disabled={!isReady || !hasPaths}
           onClick={onReset}
           type="button"
         >

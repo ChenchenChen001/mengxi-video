@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   distancePointToSegment,
+  distanceSegmentToSegment,
   findHitPathIds,
+  findHitPathIdsAlongSegment,
   getGuideOpacity,
   isEditorMode,
   screenPixelsToLogical,
@@ -35,6 +37,18 @@ test('measures distance to a degenerate line segment as a point', () => {
   assert.equal(
     distancePointToSegment({ x: 3, y: 4 }, { x: 0, y: 0 }, { x: 0, y: 0 }),
     5,
+  );
+});
+
+test('measures crossing line segments as zero distance', () => {
+  assert.equal(
+    distanceSegmentToSegment(
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 5, y: -5 },
+      { x: 5, y: 5 },
+    ),
+    0,
   );
 });
 
@@ -81,4 +95,21 @@ test('returns a duplicate path id only once across separate path objects', () =>
   ];
 
   assert.deepEqual(findHitPathIds(paths, { x: 10, y: 5 }, 6), ['duplicate']);
+});
+
+test('hits a path crossed between two fast erase pointer samples', () => {
+  const paths = [{
+    id: 'vertical',
+    points: [{ x: 5, y: -5 }, { x: 5, y: 5 }],
+  }];
+
+  assert.deepEqual(
+    findHitPathIdsAlongSegment(
+      paths,
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      0,
+    ),
+    ['vertical'],
+  );
 });

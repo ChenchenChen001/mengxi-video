@@ -55,9 +55,80 @@ export function distancePointToSegment(
   return Math.hypot(point.x - nearestX, point.y - nearestY);
 }
 
-export function findHitPathIds(
-  paths: PathLike[],
+function crossProduct(
+  first: PointLike,
+  second: PointLike,
+  third: PointLike,
+): number {
+  return (
+    (second.x - first.x) * (third.y - first.y)
+    - (second.y - first.y) * (third.x - first.x)
+  );
+}
+
+function pointIsOnSegment(
   point: PointLike,
+  start: PointLike,
+  end: PointLike,
+): boolean {
+  const epsilon = 1e-9;
+  return (
+    Math.abs(crossProduct(start, end, point)) <= epsilon
+    && point.x >= Math.min(start.x, end.x) - epsilon
+    && point.x <= Math.max(start.x, end.x) + epsilon
+    && point.y >= Math.min(start.y, end.y) - epsilon
+    && point.y <= Math.max(start.y, end.y) + epsilon
+  );
+}
+
+function segmentsIntersect(
+  firstStart: PointLike,
+  firstEnd: PointLike,
+  secondStart: PointLike,
+  secondEnd: PointLike,
+): boolean {
+  const firstSideStart = crossProduct(firstStart, firstEnd, secondStart);
+  const firstSideEnd = crossProduct(firstStart, firstEnd, secondEnd);
+  const secondSideStart = crossProduct(secondStart, secondEnd, firstStart);
+  const secondSideEnd = crossProduct(secondStart, secondEnd, firstEnd);
+
+  if (
+    firstSideStart * firstSideEnd < 0
+    && secondSideStart * secondSideEnd < 0
+  ) {
+    return true;
+  }
+
+  return (
+    pointIsOnSegment(secondStart, firstStart, firstEnd)
+    || pointIsOnSegment(secondEnd, firstStart, firstEnd)
+    || pointIsOnSegment(firstStart, secondStart, secondEnd)
+    || pointIsOnSegment(firstEnd, secondStart, secondEnd)
+  );
+}
+
+export function distanceSegmentToSegment(
+  firstStart: PointLike,
+  firstEnd: PointLike,
+  secondStart: PointLike,
+  secondEnd: PointLike,
+): number {
+  if (segmentsIntersect(firstStart, firstEnd, secondStart, secondEnd)) {
+    return 0;
+  }
+
+  return Math.min(
+    distancePointToSegment(firstStart, secondStart, secondEnd),
+    distancePointToSegment(firstEnd, secondStart, secondEnd),
+    distancePointToSegment(secondStart, firstStart, firstEnd),
+    distancePointToSegment(secondEnd, firstStart, firstEnd),
+  );
+}
+
+export function findHitPathIdsAlongSegment(
+  paths: PathLike[],
+  eraseStart: PointLike,
+  eraseEnd: PointLike,
   radius: number,
   excludedIds: ReadonlySet<PathId> = new Set(),
 ): PathId[] {
@@ -68,7 +139,14 @@ export function findHitPathIds(
     if (seenIds.has(path.id)) continue;
 
     for (let index = 1; index < path.points.length; index += 1) {
-      if (distancePointToSegment(point, path.points[index - 1], path.points[index]) <= radius) {
+      if (
+        distanceSegmentToSegment(
+          eraseStart,
+          eraseEnd,
+          path.points[index - 1],
+          path.points[index],
+        ) <= radius
+      ) {
         hitIds.push(path.id);
         seenIds.add(path.id);
         break;
@@ -77,4 +155,19 @@ export function findHitPathIds(
   }
 
   return hitIds;
+}
+
+export function findHitPathIds(
+  paths: PathLike[],
+  point: PointLike,
+  radius: number,
+  excludedIds: ReadonlySet<PathId> = new Set(),
+): PathId[] {
+  return findHitPathIdsAlongSegment(
+    paths,
+    point,
+    point,
+    radius,
+    excludedIds,
+  );
 }

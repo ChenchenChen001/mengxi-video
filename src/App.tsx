@@ -13,7 +13,7 @@ import {
 } from './projectData.ts';
 import { SimpleExperienceControls } from './SimpleExperienceControls.tsx';
 import {
-  findHitPathIds,
+  findHitPathIdsAlongSegment,
   getGuideOpacity,
   isEditorMode,
   screenPixelsToLogical,
@@ -865,6 +865,7 @@ export default function App() {
   const [showPaths, setShowPaths] = useState(editorMode);
   const [showGrid, setShowGrid] = useState(editorMode);
   const [simpleTool, setSimpleTool] = useState<ExperienceTool>('draw');
+  const [simpleExperienceReady, setSimpleExperienceReady] = useState(editorMode);
   const [shimmerBrushSize, setShimmerBrushSize] = useState(1);
   const [invertBrushSize, setInvertBrushSize] = useState(1);
   const [snapStep, setSnapStep] = useState(0.5);
@@ -1121,6 +1122,7 @@ export default function App() {
   const simpleErasePointerActiveRef = useRef(false);
   const simpleEraseUndoSavedRef = useRef(false);
   const simpleErasedPathIdsRef = useRef<Set<string | number>>(new Set());
+  const simpleEraseLastPointRef = useRef<Point | null>(null);
   const drawingModeRef = useRef<'path' | 'lasso' | 'invert' | 'grid' | 'inspect' | 'speed_select' | 'scissors' | 'edit' | 'bezier'>('path');
   const selectedParticleIdRef = useRef<number | null>(null);
   const expandedPathIdRef = useRef<number | null>(null);
@@ -2279,10 +2281,11 @@ export default function App() {
     };
   }, [drawingMode, uiVisible, logicalWidth, logicalHeight]);
 
-  const eraseSimplePathsAtPoint = (point: Point) => {
-    const hitIds = findHitPathIds(
+  const eraseSimplePathsAlongSegment = (start: Point, end: Point) => {
+    const hitIds = findHitPathIdsAlongSegment(
       pathsRef.current,
-      point,
+      start,
+      end,
       screenPixelsToLogical(24, viewScaleRef.current),
       simpleErasedPathIdsRef.current,
     );
@@ -2307,7 +2310,7 @@ export default function App() {
     pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
 
     if (!editorMode) {
-      if (e.button !== 0) return;
+      if (!simpleExperienceReady || e.button !== 0) return;
 
       e.currentTarget.setPointerCapture(e.pointerId);
       const rect = e.currentTarget.getBoundingClientRect();
@@ -2320,7 +2323,8 @@ export default function App() {
         simpleErasePointerActiveRef.current = true;
         simpleEraseUndoSavedRef.current = false;
         simpleErasedPathIdsRef.current = new Set();
-        eraseSimplePathsAtPoint(logicalPoint);
+        simpleEraseLastPointRef.current = logicalPoint;
+        eraseSimplePathsAlongSegment(logicalPoint, logicalPoint);
         return;
       }
 
@@ -2639,7 +2643,10 @@ export default function App() {
 
     if (!editorMode && simpleToolRef.current === 'erase') {
       if (simpleErasePointerActiveRef.current) {
-        eraseSimplePathsAtPoint({ x: logicalX, y: logicalY });
+        const logicalPoint = { x: logicalX, y: logicalY };
+        const previousPoint = simpleEraseLastPointRef.current ?? logicalPoint;
+        eraseSimplePathsAlongSegment(previousPoint, logicalPoint);
+        simpleEraseLastPointRef.current = logicalPoint;
       }
       return;
     }
@@ -2811,6 +2818,7 @@ export default function App() {
       simpleErasePointerActiveRef.current = false;
       simpleEraseUndoSavedRef.current = false;
       simpleErasedPathIdsRef.current = new Set();
+      simpleEraseLastPointRef.current = null;
       setIsDrawing(false);
       currentPathRef.current = [];
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
@@ -2823,6 +2831,7 @@ export default function App() {
       simpleErasePointerActiveRef.current = false;
       simpleEraseUndoSavedRef.current = false;
       simpleErasedPathIdsRef.current = new Set();
+      simpleEraseLastPointRef.current = null;
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId);
       }
@@ -3300,14 +3309,19 @@ export default function App() {
         }
         return response.json() as Promise<SerializedProjectData>;
       })
-      .then(data => {
+      .then(async data => {
         if (cancelled || manualProjectImportStartedRef.current) return;
         projectImportStartedRef.current = true;
-        return applyProjectData(
+        await applyProjectData(
           data,
           editorMode ? '内置项目已载入' : undefined,
           !editorMode,
         );
+        if (!editorMode && !cancelled) {
+          setUndoStack([]);
+          setRedoStack([]);
+          setSimpleExperienceReady(true);
+        }
       })
       .catch(error => {
         if (cancelled) return;
@@ -3999,6 +4013,7 @@ export default function App() {
     simpleErasePointerActiveRef.current = false;
     simpleEraseUndoSavedRef.current = false;
     simpleErasedPathIdsRef.current = new Set();
+    simpleEraseLastPointRef.current = null;
     currentPathRef.current = [];
     setIsDrawing(false);
   };
@@ -4032,8 +4047,10 @@ export default function App() {
       `}</style>
       <canvas
         ref={canvasRef}
-        tabIndex={0}
-        className={`absolute inset-0 w-full h-full outline-none ${
+        aria-hidden={editorMode ? undefined : true}
+        aria-label={editorMode ? '动画编辑画布' : undefined}
+        tabIndex={editorMode ? 0 : undefined}
+        className={`absolute inset-0 w-full h-full ${editorMode ? 'outline-none' : ''} ${
           !editorMode
             ? (simpleTool === 'erase' ? 'cursor-red' : 'cursor-crosshair')
             : isPanning ? 'cursor-grabbing'
@@ -5500,8 +5517,9 @@ export default function App() {
       {!editorMode && (
         <SimpleExperienceControls
           tool={simpleTool}
-          canUndo={undoStack.length > 0}
-          hasPaths={paths.length > 0}
+          canUndo={simpleExperienceReady && undoStack.length > 0}
+          hasPaths={simpleExperienceReady && paths.length > 0}
+          isReady={simpleExperienceReady}
           onToolChange={handleSimpleToolChange}
           onUndo={undo}
           onReset={resetSimpleExperience}

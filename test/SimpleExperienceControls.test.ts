@@ -44,3 +44,18 @@ test('disables undo and reset until their corresponding history is available', (
   assert.doesNotMatch(available, /aria-label="撤销"[^>]*disabled=""/);
   assert.doesNotMatch(available, /aria-label="重置"[^>]*disabled=""/);
 });
+
+test('disables every interaction while the built-in experience is loading', () => {
+  const markup = renderControls({
+    isReady: false,
+    canUndo: true,
+    hasPaths: true,
+  });
+
+  assert.match(markup, /正在载入素材，请稍候/);
+  assert.match(markup, /aria-busy="true"/);
+  assert.match(markup, /aria-label="绘制工具"/);
+  for (const label of ['画线', '橡皮', '撤销', '重置']) {
+    assert.match(markup, new RegExp(`aria-label="${label}"[^>]*disabled=""`));
+  }
+});
